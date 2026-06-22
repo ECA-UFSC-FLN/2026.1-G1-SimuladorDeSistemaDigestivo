@@ -19,8 +19,8 @@
 #define SensorPin A0
 
 // Variáveis de Calibração do pH
-float phGain = 3.5;    // Valor padrão de 'm' (ganho/slope)
-float phOffset = -1.8; // Valor padrão de offset (intercepção)
+float phGain = -5.83; // Valor padrão de 'm' (ganho/slope)
+float phOffset = 23;  // Valor padrão de offset (intercepção)
 
 int buf[10];
 float phAtual = 0.0;
@@ -49,8 +49,8 @@ const unsigned long INTERVALO_PH_MS = 1000; // le pH a cada 1s
 // ============ CONTROLADOR PI + LINEARIZAÇÃO ============
 bool piAtivo = false;
 float piSetpoint = 7.0;      // pH alvo desejado
-float piKp = 0.8;            // Ganho proporcional (Kp > 0)
-float piKi = 0.2;            // Ganho integral (Ki > 0, 1/s)
+float piKp = 0.6;            // Ganho proporcional (Kp > 0)
+float piKi = 0.1;            // Ganho integral (Ki > 0, 1/s)
 float piErroAcumulado = 0.0; // Erro integral acumulado
 unsigned long ultimoCicloPI = 0;
 unsigned long piIntervaloMs = 1000; // Ciclo de controle a cada 1s

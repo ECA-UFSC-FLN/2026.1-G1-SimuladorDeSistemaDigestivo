@@ -563,6 +563,31 @@ class SerialApp(ctk.CTk):
         elif ">>> Controlador PI desativado" in line:
             self.set_operation_mode(False)
 
+        # Parse real-time PI controller telemetry
+        if line.startswith("[PI]"):
+            try:
+                parts = line[4:].strip().split("|")
+                for part in parts:
+                    if ":" in part:
+                        p_tag, p_val = part.split(":", 1)
+                        p_tag = p_tag.strip()
+                        p_val = p_val.strip()
+                        if p_val.endswith(" ml"):
+                            p_val = p_val[:-3].strip()
+                        
+                        try:
+                            val_float = float(p_val)
+                            if p_tag == "SP":
+                                self.latest_tag_values["Setpoint"] = val_float
+                            elif p_tag == "Erro":
+                                self.latest_tag_values["Erro"] = val_float
+                            elif p_tag == "u_out":
+                                self.latest_tag_values["Volume Total Inserido"] = val_float
+                        except ValueError:
+                            pass
+            except Exception:
+                pass
+
         if ":" in line:
             try:
                 tag, val = line.split(":", 1)
@@ -574,7 +599,10 @@ class SerialApp(ctk.CTk):
                     is_active = (val == "SIM")
                     self.set_operation_mode(is_active)
                 elif tag == "Setpoint (SP)":
-                    pass
+                    try:
+                        self.latest_tag_values["Setpoint"] = float(val)
+                    except ValueError:
+                        pass
                 elif tag == "Volume Reator V0":
                     pass
                 elif tag == "Kp":
@@ -584,13 +612,20 @@ class SerialApp(ctk.CTk):
                     self.current_ki = val
                     self.update_kp_ki_display()
                 elif tag == "Erro acumulado (I)":
-                    pass
+                    try:
+                        self.latest_tag_values["Erro"] = float(val)
+                    except ValueError:
+                        pass
                 elif tag == "u_max":
                     self.current_umax = val
                     self.update_u_display()
                 elif tag == "u_prev":
                     self.current_uprev = val
                     self.update_u_display()
+                    try:
+                        self.latest_tag_values["Volume Total Inserido"] = float(val)
+                    except ValueError:
+                        pass
 
                 try:
                     self.latest_tag_values[tag] = float(val)
@@ -698,6 +733,11 @@ class SerialApp(ctk.CTk):
                         # For display tags, use the latest received value
                         snapshot[tag] = self.latest_tag_values.get(tag, "")
             
+            # Add control variables to the snapshot
+            snapshot["Setpoint"] = self.latest_tag_values.get("Setpoint", "")
+            snapshot["Erro"] = self.latest_tag_values.get("Erro", "")
+            snapshot["Volume Total Inserido"] = self.latest_tag_values.get("Volume Total Inserido", "")
+            
             self.recording_data.append(snapshot)
             # Sample every 100ms
             self.after(100, self.record_snapshot_loop)
@@ -723,9 +763,30 @@ class SerialApp(ctk.CTk):
                     for rec in self.recording_data:
                         all_keys.update(rec.keys())
                     
-                    ordered_keys = ["timestamp", "millis"]
-                    other_keys = sorted(list(all_keys - set(ordered_keys)))
-                    fieldnames = ordered_keys + other_keys
+                    ordered_keys = [
+                        "timestamp", 
+                        "millis", 
+                        self.tag_disp1_var.get().strip(), 
+                        self.tag_disp2_var.get().strip(), 
+                        self.tag_inp1_var.get().strip(), 
+                        self.tag_inp2_var.get().strip(),
+                        "Setpoint",
+                        "Erro",
+                        "Volume Total Inserido"
+                    ]
+                    # Filter out empty or duplicate names
+                    ordered_keys = [k for k in ordered_keys if k]
+                    
+                    # Deduplicate ordered_keys while keeping order
+                    seen = set()
+                    final_ordered_keys = []
+                    for k in ordered_keys:
+                        if k not in seen:
+                            seen.add(k)
+                            final_ordered_keys.append(k)
+                            
+                    other_keys = sorted(list(all_keys - set(final_ordered_keys)))
+                    fieldnames = final_ordered_keys + other_keys
                     
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
