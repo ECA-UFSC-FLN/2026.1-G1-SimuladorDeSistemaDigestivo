@@ -41,6 +41,7 @@ const int SENTIDO_DISPENSA = -1;
 
 AccelStepper stepper(AccelStepper::DRIVER, PUL, DIR);
 float volumeAtual = 0.0;
+bool emAjuste = true;
 
 // ============ CONTROLE DE TEMPO ============
 unsigned long ultimaLeituraPH = 0;
@@ -281,31 +282,35 @@ void moverPassos(long passosSolicitados) {
   if (passosSolicitados == 0)
     return;
 
-  // converte passos em ml equivalente pra checar limites
-  float voltasEquiv = (float)passosSolicitados / PASSOS_POR_VOLTA;
-  float mlEquiv = voltasEquiv / VOLTAS_POR_ML;
+  float mlEquiv = 0.0;
+  float volumeFinal = volumeAtual;
 
-  float volumeFinal = volumeAtual - mlEquiv;
+  if (!emAjuste) {
+    // converte passos em ml equivalente pra checar limites
+    float voltasEquiv = (float)passosSolicitados / PASSOS_POR_VOLTA;
+    mlEquiv = voltasEquiv / VOLTAS_POR_ML;
+    volumeFinal = volumeAtual - mlEquiv;
 
-  if (volumeFinal < VOLUME_MIN_ML) {
-    Serial.print(F("ERRO: "));
-    Serial.print(passosSolicitados);
-    Serial.print(F(" passos (~"));
-    Serial.print(mlEquiv, 2);
-    Serial.print(F(" ml) deixaria seringa em "));
-    Serial.print(volumeFinal, 2);
-    Serial.println(F(" ml."));
-    return;
-  }
-  if (volumeFinal > VOLUME_MAX_ML) {
-    Serial.print(F("ERRO: "));
-    Serial.print(passosSolicitados);
-    Serial.print(F(" passos (~"));
-    Serial.print(-mlEquiv, 2);
-    Serial.print(F(" ml aspiracao) ultrapassaria "));
-    Serial.print(VOLUME_MAX_ML, 1);
-    Serial.println(F(" ml."));
-    return;
+    if (volumeFinal < VOLUME_MIN_ML) {
+      Serial.print(F("ERRO: "));
+      Serial.print(passosSolicitados);
+      Serial.print(F(" passos (~"));
+      Serial.print(mlEquiv, 2);
+      Serial.print(F(" ml) deixaria seringa em "));
+      Serial.print(volumeFinal, 2);
+      Serial.println(F(" ml."));
+      return;
+    }
+    if (volumeFinal > VOLUME_MAX_ML) {
+      Serial.print(F("ERRO: "));
+      Serial.print(passosSolicitados);
+      Serial.print(F(" passos (~"));
+      Serial.print(-mlEquiv, 2);
+      Serial.print(F(" ml aspiracao) ultrapassaria "));
+      Serial.print(VOLUME_MAX_ML, 1);
+      Serial.println(F(" ml."));
+      return;
+    }
   }
 
   long passosReais = passosSolicitados * SENTIDO_DISPENSA;
@@ -313,9 +318,13 @@ void moverPassos(long passosSolicitados) {
 
   Serial.print(F("Movendo "));
   Serial.print(passosSolicitados);
-  Serial.print(F(" passos (~"));
-  Serial.print(mlEquiv, 3);
-  Serial.println(F(" ml)..."));
+  if (!emAjuste) {
+    Serial.print(F(" passos (~"));
+    Serial.print(mlEquiv, 3);
+    Serial.println(F(" ml)..."));
+  } else {
+    Serial.println(F(" passos (modo ajuste)..."));
+  }
 
   stepper.move(passosReais);
   while (stepper.distanceToGo() != 0)
@@ -324,11 +333,18 @@ void moverPassos(long passosSolicitados) {
   long posicaoDepois = stepper.currentPosition();
   long passosExecutados = posicaoDepois - posicaoAntes;
 
-  volumeAtual = volumeFinal;
+  if (!emAjuste) {
+    volumeAtual = volumeFinal;
+  }
 
   Serial.print(F("OK | Seringa: "));
-  Serial.print(volumeAtual, 2);
-  Serial.print(F(" ml | Passos enviados: "));
+  if (!emAjuste) {
+    Serial.print(volumeAtual, 2);
+    Serial.print(F(" ml"));
+  } else {
+    Serial.print(F("Nao definida"));
+  }
+  Serial.print(F(" | Passos enviados: "));
   Serial.print(passosExecutados);
   Serial.print(F(" | Posicao acumulada: "));
   Serial.println(posicaoDepois);
@@ -354,36 +370,6 @@ void setup() {
   Serial.print(VOLUME_MAX_ML, 1);
   Serial.println(F(" ml\n"));
 
-  Serial.print(F("Volume inicial na seringa (ml)? "));
-  while (Serial.available() == 0) {
-    delay(10);
-  }
-  volumeAtual = Serial.parseFloat();
-  while (Serial.available() > 0)
-    Serial.read();
-
-  if (volumeAtual < VOLUME_MIN_ML || volumeAtual > VOLUME_MAX_ML) {
-    Serial.print(F("AVISO: volume "));
-    Serial.print(volumeAtual, 2);
-    Serial.println(F(" ml fora da faixa segura!"));
-  }
-
-  Serial.print(F("Volume registrado: "));
-  Serial.print(volumeAtual, 2);
-  Serial.println(F(" ml"));
-
-  Serial.print(F("Volume do reator V0 (ml)? "));
-  while (Serial.available() == 0) {
-    delay(10);
-  }
-  V0 = Serial.parseFloat();
-  while (Serial.available() > 0)
-    Serial.read();
-
-  Serial.print(F("Volume V0 registrado: "));
-  Serial.print(V0, 2);
-  Serial.println(F(" ml"));
-
   // primeira leitura de pH
   phAtual = lerPH();
   Serial.print(F("pH inicial: "));
@@ -393,6 +379,9 @@ void setup() {
   Serial.print(stepper.currentPosition());
   Serial.println(F(" passos"));
   Serial.println(F("--------------------------------------"));
+
+  // Envia status inicial de ajuste
+  Serial.println(F("STATUS:AJUSTE"));
 }
 
 // ============ LOOP ============
@@ -425,11 +414,45 @@ void loop() {
 
     // Processamento de comandos
     if (linhaLower.startsWith("ml:")) {
-      float ml = linha.substring(3).toFloat();
-      moverML(ml);
+      if (emAjuste) {
+        Serial.println(F("ERRO: Defina os volumes antes de dosar em ml."));
+      } else {
+        float ml = linha.substring(3).toFloat();
+        moverML(ml);
+      }
     } else if (linhaLower.startsWith("step:")) {
       long passos = linha.substring(5).toInt();
       moverPassos(passos);
+    } else if (linhaLower.startsWith("init:")) {
+      // Formato: init:<vol_seringa>:<vol_reator>
+      int idx1 = linha.indexOf(':');
+      int idx2 = linha.indexOf(':', idx1 + 1);
+      if (idx1 != -1 && idx2 != -1) {
+        float volSeringa = linha.substring(idx1 + 1, idx2).toFloat();
+        float volReator = linha.substring(idx2 + 1).toFloat();
+        
+        if (volSeringa >= VOLUME_MIN_ML && volSeringa <= VOLUME_MAX_ML && volReator > 0) {
+          volumeAtual = volSeringa;
+          V0 = volReator;
+          emAjuste = false;
+          Serial.print(F(">>> Inicializado. Seringa: "));
+          Serial.print(volumeAtual, 2);
+          Serial.print(F(" ml | Reator V0: "));
+          Serial.print(V0, 2);
+          Serial.println(F(" ml"));
+          Serial.println(F("STATUS:PRONTO"));
+        } else {
+          Serial.println(F("ERRO: Valores invalidos para inicializacao."));
+        }
+      } else {
+        Serial.println(F("ERRO: Formato incorreto. Use init:<vol_seringa>:<vol_reator>"));
+      }
+    } else if (linhaLower == "status") {
+      if (emAjuste) {
+        Serial.println(F("STATUS:AJUSTE"));
+      } else {
+        Serial.println(F("STATUS:PRONTO"));
+      }
     }
     // Novos comandos de calibração de pH
     else if (linhaLower.startsWith("offset:")) {

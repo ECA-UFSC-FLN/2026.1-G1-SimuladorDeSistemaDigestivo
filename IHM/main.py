@@ -280,10 +280,22 @@ class SerialApp(ctk.CTk):
         success = self.connect_serial()
         
         if success:
-            self.show_main_interface()
+            # Instead of show_main_interface, wait and check initialization status
+            self.after(1500, self.check_initialization_status)
         else:
             self.start_conn_btn.configure(state="normal", text="Iniciar Conexão")
             self.show_connection_error()
+
+    def check_initialization_status(self):
+        if self.is_connected:
+            self._write_serial("status\n")
+            # Fallback to main interface if no response in 1 second
+            self.after(1000, self.fallback_initialization)
+
+    def fallback_initialization(self):
+        # If still in intro_frame (i.e. neither STATUS:AJUSTE nor STATUS:PRONTO was processed), fallback to main
+        if self.is_connected and hasattr(self, 'intro_frame') and self.intro_frame:
+            self.show_main_interface()
 
     def show_connection_error(self):
         messagebox.showwarning(
@@ -301,6 +313,11 @@ class SerialApp(ctk.CTk):
             self.intro_frame.grid_forget()
             self.intro_frame.destroy()
             self.intro_frame = None
+            
+        if hasattr(self, 'setup_frame') and self.setup_frame:
+            self.setup_frame.grid_forget()
+            self.setup_frame.destroy()
+            self.setup_frame = None
             
         # Configure columns for main dashboard layout
         self.grid_columnconfigure(0, weight=0) # Sidebar
@@ -525,6 +542,8 @@ class SerialApp(ctk.CTk):
             self.pi_status_label.configure(text="Status: Lendo...", text_color="orange")
             # Setup flag to wait for main loop telemetry before querying PI info
             self.setup_complete = False
+            # Query the current state of the Arduino
+            self.after(1000, lambda: self._write_serial("status\n"))
             return True
         except Exception as e:
             self.log_message(f"Erro: {e}")
@@ -552,6 +571,13 @@ class SerialApp(ctk.CTk):
     def process_incoming(self, line):
         self.log_message(line, "RX")
         
+        if line == "STATUS:AJUSTE":
+            self.after(0, self.show_setup_interface)
+            return
+        elif line == "STATUS:PRONTO":
+            self.after(0, self.show_main_interface)
+            return
+            
         # Se a linha termina com "?", exibe um modal para resposta
         if line.endswith("?"):
             self.after(0, self.prompt_question, line)
@@ -818,6 +844,149 @@ class SerialApp(ctk.CTk):
 
     def open_settings_modal(self):
         self.settings_modal = SettingsModal(self)
+
+    def show_setup_interface(self):
+        if hasattr(self, 'intro_frame') and self.intro_frame:
+            self.intro_frame.grid_forget()
+            self.intro_frame.destroy()
+            self.intro_frame = None
+            
+        if hasattr(self, 'main_container') and self.main_container.winfo_ismapped():
+            self.sidebar_frame.grid_forget()
+            self.main_container.grid_forget()
+            
+        if hasattr(self, 'setup_frame') and self.setup_frame:
+            # Already showing
+            return
+            
+        self.create_setup_screen()
+
+    def create_setup_screen(self):
+        # Configure grid for single centered column
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=0)
+        self.grid_rowconfigure(0, weight=1)
+        
+        self.setup_frame = ctk.CTkFrame(self, fg_color="#1e1e1e")
+        self.setup_frame.grid(row=0, column=0, sticky="nsew")
+        
+        # Center card container
+        card = ctk.CTkFrame(self.setup_frame, width=550, height=520, fg_color="#2b2b2b", border_width=1, border_color="#34495e", corner_radius=15)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        # Title
+        title_lbl = ctk.CTkLabel(card, text="Configuração e Ajuste da Seringa", font=ctk.CTkFont(size=20, weight="bold"), text_color="#3498db")
+        title_lbl.pack(pady=(20, 5))
+        
+        desc_lbl = ctk.CTkLabel(card, text="Ajuste o motor para encaixar a seringa antes de registrar os volumes.", font=ctk.CTkFont(size=12), text_color="gray")
+        desc_lbl.pack(pady=(0, 20))
+        
+        # --- Section 1: Manual Motor Control (Jogging) ---
+        jog_frame = ctk.CTkFrame(card, fg_color="transparent")
+        jog_frame.pack(fill="x", padx=40, pady=5)
+        
+        ctk.CTkLabel(jog_frame, text="1. AJUSTE MANUAL DO MOTOR", font=ctk.CTkFont(size=13, weight="bold"), text_color="white").pack(anchor="w", pady=(0, 10))
+        
+        # Coarse buttons row (Ajuste Grosseiro)
+        coarse_frame = ctk.CTkFrame(jog_frame, fg_color="transparent")
+        coarse_frame.pack(fill="x", pady=2)
+        
+        btn_coarse_back = ctk.CTkButton(coarse_frame, text="◀◀ Recuar Grosseiro", command=self.jog_coarse_backward, fg_color="#34495e", hover_color="#2c3e50", height=45, font=ctk.CTkFont(size=13, weight="bold"))
+        btn_coarse_back.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        btn_coarse_fwd = ctk.CTkButton(coarse_frame, text="Avançar Grosseiro ▶▶", command=self.jog_coarse_forward, fg_color="#2980b9", hover_color="#1f618d", height=45, font=ctk.CTkFont(size=13, weight="bold"))
+        btn_coarse_fwd.pack(side="right", fill="x", expand=True, padx=(5, 0))
+        
+        # Fine buttons row (Ajuste Fino)
+        fine_frame = ctk.CTkFrame(jog_frame, fg_color="transparent")
+        fine_frame.pack(fill="x", pady=(8, 2))
+        
+        btn_fine_back = ctk.CTkButton(fine_frame, text="◀ Recuar Fino", command=self.jog_fine_backward, fg_color="#2c3e50", hover_color="#1a252f", height=32, font=ctk.CTkFont(size=11))
+        btn_fine_back.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        btn_fine_fwd = ctk.CTkButton(fine_frame, text="Avançar Fino ▶", command=self.jog_fine_forward, fg_color="#3498db", hover_color="#2980b9", height=32, font=ctk.CTkFont(size=11))
+        btn_fine_fwd.pack(side="right", fill="x", expand=True, padx=(5, 0))
+        
+        warning_lbl = ctk.CTkLabel(jog_frame, text="Aviso: Limites de fim de curso via software inativos nesta etapa.", font=ctk.CTkFont(size=10), text_color="#e67e22")
+        warning_lbl.pack(pady=(8, 5))
+        
+        # Divider line
+        divider = ctk.CTkFrame(card, height=1, fg_color="#34495e")
+        divider.pack(fill="x", padx=40, pady=15)
+        
+        # --- Section 2: Volume Inputs ---
+        vol_frame = ctk.CTkFrame(card, fg_color="transparent")
+        vol_frame.pack(fill="x", padx=40, pady=5)
+        
+        ctk.CTkLabel(vol_frame, text="2. VOLUMES INICIAIS", font=ctk.CTkFont(size=13, weight="bold"), text_color="white").pack(anchor="w", pady=(0, 10))
+        
+        # Syringe Volume
+        v_seringa_row = ctk.CTkFrame(vol_frame, fg_color="transparent")
+        v_seringa_row.pack(fill="x", pady=5)
+        ctk.CTkLabel(v_seringa_row, text="Volume na Seringa (ml):", font=ctk.CTkFont(size=12)).pack(side="left")
+        self.setup_vol_seringa = ctk.CTkEntry(v_seringa_row, placeholder_text="1.0 a 19.0", width=120)
+        self.setup_vol_seringa.pack(side="right")
+        self.setup_vol_seringa.insert(0, "15.0")
+        
+        # Reactor Volume V0
+        v_reator_row = ctk.CTkFrame(vol_frame, fg_color="transparent")
+        v_reator_row.pack(fill="x", pady=5)
+        ctk.CTkLabel(v_reator_row, text="Volume do Reator V0 (ml):", font=ctk.CTkFont(size=12)).pack(side="left")
+        self.setup_vol_reator = ctk.CTkEntry(v_reator_row, placeholder_text="Ex: 50.0", width=120)
+        self.setup_vol_reator.pack(side="right")
+        self.setup_vol_reator.insert(0, "50.0")
+        
+        # Confirm Button
+        self.confirm_setup_btn = ctk.CTkButton(card, text="Confirmar e Iniciar Sistema", height=45, command=self.confirm_setup, fg_color="#2ecc71", hover_color="#27ae60", font=ctk.CTkFont(size=14, weight="bold"))
+        self.confirm_setup_btn.pack(fill="x", padx=40, pady=(20, 10))
+        
+        # Cancel / Back Button
+        back_btn = ctk.CTkButton(card, text="Voltar / Desconectar", height=30, command=self.cancel_setup, fg_color="transparent", hover_color="#c0392b", border_width=1, border_color="#e74c3c", text_color="#e74c3c")
+        back_btn.pack(fill="x", padx=40, pady=(0, 20))
+
+    def jog_coarse_forward(self):
+        self._write_serial("step:3000\n")
+
+    def jog_coarse_backward(self):
+        self._write_serial("step:-3000\n")
+
+    def jog_fine_forward(self):
+        self._write_serial("step:150\n")
+
+    def jog_fine_backward(self):
+        self._write_serial("step:-150\n")
+
+    def confirm_setup(self):
+        vol_seringa_str = self.setup_vol_seringa.get().strip()
+        vol_reator_str = self.setup_vol_reator.get().strip()
+        
+        try:
+            vol_seringa = float(vol_seringa_str)
+            vol_reator = float(vol_reator_str)
+        except ValueError:
+            messagebox.showerror("Erro de Validação", "Por favor, insira valores numéricos válidos.")
+            return
+            
+        if not (1.0 <= vol_seringa <= 19.0):
+            messagebox.showerror("Erro de Validação", "O volume da seringa deve estar entre 1.0 e 19.0 ml.")
+            return
+            
+        if vol_reator <= 0:
+            messagebox.showerror("Erro de Validação", "O volume do reator deve ser maior que 0 ml.")
+            return
+            
+        self.confirm_setup_btn.configure(state="disabled", text="Inicializando...")
+        self.update_idletasks()
+        
+        self._write_serial(f"init:{vol_seringa}:{vol_reator}\n")
+
+    def cancel_setup(self):
+        self.disconnect_serial()
+        if hasattr(self, 'setup_frame') and self.setup_frame:
+            self.setup_frame.grid_forget()
+            self.setup_frame.destroy()
+            self.setup_frame = None
+        self.create_intro_screen()
 
 class CalibrationModal(ctk.CTkToplevel):
     def __init__(self, app):
